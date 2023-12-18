@@ -41,7 +41,7 @@ skynet.start(function()
         local srv = skynet.newservice("gateway", "gateway", i)
         skynet.name("gateway" .. i, srv)
     end
-    --login
+    -- login
     for i, v in pairs(nodecfg.login or {}) do
         local srv = skynet.newservice("login", "login", i)
         skynet.name("login" .. i, srv)
@@ -55,7 +55,7 @@ skynet.start(function()
         local proxy = cluster.proxy(anode, "agentmgr")
         skynet.name("agentmgr", proxy)
     end
-    -- --scene (sid->sceneid)
+    --scene (sid->sceneid)
     -- for _, sid in pairs(runconfig.scene[mynode] or {}) do
     --     local srv = skynet.newservice("scene", "scene", sid)
     --     skynet.name("scene" .. sid, srv)

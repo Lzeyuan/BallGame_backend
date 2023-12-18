@@ -2,6 +2,7 @@ local skynet = require "skynet"
 local socket = require "skynet.socket"
 local s = require "service"
 local runconfig = require "runconfig"
+local cjson = require "cjson"
 
 local conns = {}
 
@@ -47,6 +48,8 @@ end
 
 --获取信息内容(,)
 local process_msg = function(fd, msg_str)
+    skynet.error("raw msg：" .. msg_str)
+
     local cmd, msg = str_unpack(msg_str)
     skynet.error(string.format("recv %d [cmd] {%s}", fd, table.concat(msg, ",")))
 
@@ -98,11 +101,13 @@ end
 --监听并消息
 local recv_loop = function(fd)
     socket.start(fd)
-    skynet.error(string.format("sockeet connected %d", fd))
+    skynet.error(string.format("socket connected %d", fd))
 
     local read_buffer = ""
     while true do
         local recvstr = socket.read(fd)
+        skynet.error("receive" .. recvstr);
+
         if recvstr then
             read_buffer = read_buffer .. recvstr
             read_buffer = process_buffer(fd, read_buffer)
