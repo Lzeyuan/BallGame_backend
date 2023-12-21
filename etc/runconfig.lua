@@ -1,8 +1,8 @@
 return {
     --集群
     cluster = {
-        node1 = "0.0.0.0:13000",
-        node2 = "0.0.0.0:13001",
+        node1 = "0.0.0.0:13031",
+        node2 = "0.0.0.0:13032",
     },
     --agentmgr
     agentmgr = { node = "node1" },
@@ -14,8 +14,8 @@ return {
     --节点1
     node1 = {
         gateway = {
-            [1] = { port = 12103 },
-            [2] = { port = 12104 },
+            [1] = { port = 12111 },
+            [2] = { port = 8889 },
         },
         login = {
             [1] = {},

@@ -4,29 +4,9 @@ local runconfig = require "runconfig"
 local cluster = require "skynet.cluster"
 local cjson = require "cjson"
 
-local test1 = function()
-    local msg = {
-        _cmd = "ball_list",
-        balls = {
-            [1] = { id = 102, x = 10, y = 20, size = 1 },
-            [2] = { id = 103, x = 20, y = 30, size = 2 }
-        }
-    }
-    local buffer = cjson.encode(msg)
-    print(buffer)
-
-    buffer = [[{"_cmd":"enter","playerid":10086}]]
-    local isok, msg = pcall(cjson.decode, buffer)
-    if isok then
-        print(msg._cmd)
-        print(msg.playerid)
-    else
-        print("error")
-    end
-end
+local max_client = 64
 
 skynet.start(function()
-    test1()
     --初始化
     local mynode = skynet.getenv("node")
     local nodecfg = runconfig[mynode]
@@ -40,6 +20,12 @@ skynet.start(function()
     for i, v in pairs(nodecfg.gateway or {}) do
         local srv = skynet.newservice("gateway", "gateway", i)
         skynet.name("gateway" .. i, srv)
+        local address,port = skynet.call(srv, "lua", "open", {
+            port = v.port,
+            maxclient = max_client,
+            nodelay = true,
+        })
+        skynet.error("gateway listen on " .. tostring(address).. ":" .. tostring(port))
     end
     -- login
     for i, v in pairs(nodecfg.login or {}) do

@@ -4,7 +4,7 @@ local s = require "service"
 s.client = {}
 
 s.resp.client = function(source, fd, cmd, msg)
-    if s.client[cmd] ~= nil then
+    if s.client[cmd] then
         local ret_msg = s.client[cmd](fd, msg, source)
         skynet.send(source, "lua", "send_by_fd", fd, ret_msg)
     else

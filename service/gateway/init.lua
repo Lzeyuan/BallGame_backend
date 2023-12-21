@@ -1,17 +1,17 @@
 local skynet = require "skynet"
-local socket = require "skynet.socket"
-local s = require "service"
-local runconfig = require "runconfig"
+local socketdriver = require "skynet.socketdriver"
+local gateserver = require "snax.gateserver"
 local cjson = require "cjson"
+local runconfig = require "runconfig"
 
 local conns = {}
-
 local players = {}
 
 --创建连接对象
 local conn = function()
     return {
         fd = nil,
+        address = nil,
         player_id = nil
     }
 end
@@ -25,132 +25,33 @@ local gateplayer = function()
     }
 end
 
---start辅助函数
-local str_unpack = function(msg_str)
-    local msg = {}
-    while true do
-        local arg, rest = string.match(msg_str, "(.-),(.*)")
-        if arg then
-            msg_str = rest
-            table.insert(msg, arg)
-        else
-            table.insert(msg, msg_str)
-            break
-        end
-    end
-    return msg[1], msg
+local CMD = {}
+
+local function json_pack(cmd, msg)
+    msg._cmd = cmd
+    local body = cjson.encode(msg)    --协议体字节流
+	local namelen = string.len(cmd)   --协议名长度
+    local bodylen = string.len(body)  --协议体长度
+	local len = namelen + bodylen + 2 --协议总长度
+	local format = string.format("> i2 i2 c%d c%d", namelen, bodylen)
+	local buff = string.pack(format, len, namelen, cmd, body)
+    return buff
 end
 
-local str_pack = function(cmd, msg)
-    return table.concat(msg, ",") .. "\r\n"
-end
---end辅助函数
-
---获取信息内容(,)
-local process_msg = function(fd, msg_str)
-    skynet.error("raw msg：" .. msg_str)
-
-    local cmd, msg = str_unpack(msg_str)
-    skynet.error(string.format("recv %d [cmd] {%s}", fd, table.concat(msg, ",")))
-
-    local conn = conns[fd]
-    local player_id = conn.player_id
-    if not player_id then
-        local node = skynet.getenv("node")
-        local nodecfg = runconfig[node]
-        local login_id = math.random(1, #nodecfg.login)
-        local login = "login" .. login_id
-
-        skynet.send(login, "lua", "client", fd, cmd, msg)
-    else
-        local gplayer = players[player_id]
-        local agent = gplayer.agent
-        skynet.send(agent, "lua", "client", cmd, msg)
-    end
-end
-
---截取一条条信息(\r\n)
-local process_buffer = function(fd, read_buffer)
-    while true do
-        local msg_str, rest = string.match(read_buffer, "(.-)\r\n(.*)")
-        if msg_str then
-            read_buffer = rest
-            process_msg(fd, msg_str)
-        else
-            return read_buffer
-        end
-    end
-end
-
-local disconnect = function(fd)
-    local c = conns[fd]
-    if c == nil then
-        return
-    end
-
-    local player_id = c.player_id
-    if player_id == nil then
-        return
-    else
-        players[player_id] = nil
-        local reason = "断线"
-        skynet.call("agentmgr", "lua", "repick", player_id, reason)
-    end
-end
-
---监听并消息
-local recv_loop = function(fd)
-    socket.start(fd)
-    skynet.error(string.format("socket connected %d", fd))
-
-    local read_buffer = ""
-    while true do
-        local recvstr = socket.read(fd)
-        skynet.error("receive" .. recvstr);
-
-        if recvstr then
-            read_buffer = read_buffer .. recvstr
-            read_buffer = process_buffer(fd, read_buffer)
-        else
-            skynet.error(string.format("socket close %d", fd))
-            disconnect(fd)
-            socket.close(fd)
-            return
-        end
-    end
-end
-
---每当有新连接
-local connect = function(fd, address)
-    -- print("connect from " .. address .. " " .. fd)
-    print(string.format("connect from %s %d", address, fd))
-    local c = conn()
-    conns[fd] = c
-    c.fd = fd
-    skynet.fork(recv_loop, fd)
-end
-
-function s.init()
-    local node = skynet.getenv("node")
-    local nodecfg = runconfig[node]
-    local port = nodecfg.gateway[s.id].port
-
-    local listenfd = socket.listen("0.0.0.0", port)
-    skynet.error("Listen socket:", "0.0.0.0", port)
-    socket.start(listenfd, connect)
-end
-
-s.resp.send_by_fd = function(source, fd, msg)
+CMD.send_by_fd = function(source, fd, msg)
     if conns[fd] == nil then
         return
     end
 
-    local buffer = str_pack(msg[1], msg)
-    skynet.error(string.format("send %d [%s] {%s}", fd, msg[1], table.concat(msg, ",")))
-    socket.write(fd, buffer)
+    local buffer = json_pack(msg[1], {
+        ErrorCode = msg[2],
+        Message = msg[3]
+    })
+    skynet.error(string.format("send %d [%s] {%s}", fd, msg[1], buffer))
+    socketdriver.send(fd, buffer)
 end
 
-s.resp.send = function(source, player_id, msg)
+CMD.send = function(source, player_id, msg)
     local gplayer = players[player_id]
     if gplayer == nil then
         return
@@ -160,7 +61,7 @@ s.resp.send = function(source, player_id, msg)
     if c == gplayer then
         return
     end
-    s.resp.send_by_fd(source, c.fd, msg)
+    CMD.send_by_fd(source, c.fd, msg)
 end
 
 --[[
@@ -169,7 +70,7 @@ return:
     1.未完成登录即下线
     2.创建角色
 --]]
-s.resp.sure_agent = function(source, fd, player_id, agent)
+CMD.sure_agent = function(source, fd, player_id, agent)
     local conn = conns[fd]
     if conn == nil then
         local reason = "未完成登录即下线"
@@ -188,7 +89,7 @@ s.resp.sure_agent = function(source, fd, player_id, agent)
     return true
 end
 
-s.resp.kick = function(source, player_id)
+CMD.kick = function(source, player_id)
     local gplayer = players[player_id]
     if gplayer == nil then
         return
@@ -204,7 +105,97 @@ s.resp.kick = function(source, player_id)
     conns[c.fd] = nil
     -- 多余https://github.com/luopeiyu/million_game_server/issues/18
     -- disconnect(c.fd)
-    socket.close(c.fd)
+    socketdriver.close(c.fd)
 end
 
-s.start(...)
+local handler = {}
+
+function handler.command(cmd, source, ...)
+    skynet.error(cmd)
+	local f = assert(CMD[cmd])
+	return f(source, ...)
+end
+
+function handler.open(source, conf)
+	return conf.address, conf.port
+end
+
+function handler.connect(fd, address)
+    print(string.format("connect from %s %d", address, fd))
+    local c = conn()
+    conns[fd] = c
+    c.fd = fd
+    c.address = address
+end
+
+local function json_unpack(buffer)
+    local len = string.len(buffer)
+    local namelen_format = string.format("> i2 c%d", len - 2)
+    local namelen, other = string.unpack(namelen_format, buffer)
+    local bodylen = len - 2 - namelen
+    local format = string.format("> c%d c%d", namelen, bodylen)
+---@diagnostic disable-next-line: param-type-mismatch
+    local cmd, bodybuff = string.unpack(format, other)
+
+    local isok, msg = pcall(cjson.decode, bodybuff)
+    if not isok or cmd then
+        print("json_unpack error")
+        return
+    end
+
+    return cmd, msg
+end
+
+function handler.message(fd, message_buffer, size)
+    local cmd, message_json = json_unpack(message_buffer);
+    skynet.error(string.format("recv %d [%s] {%s}", fd, cmd, message_json))
+    local isok, message = pcall(cjson.decode, message_json)
+
+    if not isok then
+        return
+    end
+
+    local conn = conns[fd]
+    local player_id = conn.player_id
+    if not player_id then
+        local node = skynet.getenv("node")
+        local nodecfg = runconfig[node]
+        --todo:login节点负载均衡
+        local login_id = math.random(1, #nodecfg.login)
+        local login = "login" .. login_id
+        skynet.send(login, "lua", "client", fd, cmd, message)
+    else
+        local gplayer = players[player_id]
+        local agent = gplayer.agent
+        skynet.send(agent, "lua", "client", cmd, message)
+    end
+end
+
+local function close_fd(fd)
+    local c = conns[fd]
+    if c == nil then
+        return
+    end
+
+    local player_id = c.player_id
+    if player_id == nil then
+        return
+    else
+        players[player_id] = nil
+        local reason = "断线"
+        skynet.call("agentmgr", "lua", "repick", player_id, reason)
+    end
+end
+
+function handler.disconnect(fd)
+    local c = conns[fd]
+    skynet.error("close " .. c.address .." fd:" .. fd)
+    close_fd(fd)
+end
+
+function handler.error(fd, error)
+    skynet.error("[gateway] error " .. error)
+    close_fd(fd)
+end
+
+gateserver.start(handler)
