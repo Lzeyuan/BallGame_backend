@@ -6,7 +6,7 @@ local foods = {} --[id] = food
 local food_maxid = 0
 local food_count = 0
 --球
-function ball()
+local function ball()
     local m = {
         playerid = nil,
         node = nil,
@@ -21,7 +21,7 @@ function ball()
 end
 
 --食物
-function food()
+local function food()
     local m = {
         id = nil,
         x = math.random( 0, 100),
@@ -54,7 +54,7 @@ local function foodlist_msg()
 end
 
 --广播
-function broadcast(msg)
+local function broadcast(msg)
     for i, v in pairs(balls) do
         s.send(v.node, v.agent, "send", msg)
     end
@@ -104,7 +104,7 @@ s.resp.shift = function(source, playerid, x, y)
     b.speedy = y
 end
 
-function food_update()
+local function food_update()
     if food_count > 50 then
         return
     end
@@ -123,7 +123,7 @@ function food_update()
     broadcast(msg)
 end
 
-function move_update()
+local function move_update()
     for i, v in pairs(balls) do
         v.x = v.x + v.speedx * 0.2
         v.y = v.y + v.speedy * 0.2
@@ -134,7 +134,7 @@ function move_update()
     end
 end
 
-function eat_update()
+local function eat_update()
     for pid, b in pairs(balls) do
         for fid, f in pairs(foods) do
             if (b.x-f.x)^2 + (b.y-f.y)^2 < b.size^2 then
@@ -148,7 +148,7 @@ function eat_update()
     end
 end
 
-function update(frame)
+local function update(frame)
     food_update()
     move_update()
     eat_update()

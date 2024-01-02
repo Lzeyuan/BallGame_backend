@@ -1,67 +1,73 @@
 local skynet = require "skynet"
 local socketdriver = require "skynet.socketdriver"
+local netpack = require "skynet.netpack"
 local gateserver = require "snax.gateserver"
-local cjson = require "cjson"
+local codec = require "codec"
 local runconfig = require "runconfig"
 
-local conns = {}
-local players = {}
+
+local connections = {}
+local gateway_players = {}
+local testService = nil
+
+local M = {
+  name = "",
+  id   = 0,
+  exit = nil,
+  init = nil,
+  OnStart = nil,
+  resp = {},
+}
+
+function M:Init(name, id)
+  self.name = name
+  self.id = tonumber(id)
+end
+
+M:Init(...)
 
 --创建连接对象
-local conn = function()
-    return {
-        fd = nil,
-        address = nil,
-        player_id = nil
-    }
+local create_connection = function()
+  return {
+    fd = nil,
+    address = nil,
+    player_id = nil
+  }
 end
 
 --创建万玩家对象
-local gateplayer = function()
-    return {
-        player_id = nil,
-        agent = nil,
-        conn = nil
-    }
+local create_gateway_player = function()
+  return {
+    player_id = nil,
+    agent = nil,
+    connection = nil
+  }
 end
 
 local CMD = {}
 
-local function json_pack(cmd, msg)
-    msg._cmd = cmd
-    local body = cjson.encode(msg)    --协议体字节流
-	local namelen = string.len(cmd)   --协议名长度
-    local bodylen = string.len(body)  --协议体长度
-	local len = namelen + bodylen + 2 --协议总长度
-	local format = string.format("> i2 i2 c%d c%d", namelen, bodylen)
-	local buff = string.pack(format, len, namelen, cmd, body)
-    return buff
-end
-
 CMD.send_by_fd = function(source, fd, msg)
-    if conns[fd] == nil then
-        return
-    end
+  if connections[fd] == nil then
+    return
+  end
 
-    local buffer = json_pack(msg[1], {
-        ErrorCode = msg[2],
-        Message = msg[3]
-    })
-    skynet.error(string.format("send %d [%s] {%s}", fd, msg[1], buffer))
-    socketdriver.send(fd, buffer)
+  local buffer = codec.json_pack(msg._cmd, msg)
+  local buffer_msg_string = buffer:sub(5)
+  skynet.error(string.format("send %d [%s] %s", fd, msg[1], buffer_msg_string))
+  socketdriver.send(fd, buffer)
 end
 
 CMD.send = function(source, player_id, msg)
-    local gplayer = players[player_id]
-    if gplayer == nil then
-        return
-    end
+  local gplayer = gateway_players[player_id]
+  if gplayer == nil then
+    return
+  end
 
-    local c = gplayer.conn
-    if c == gplayer then
-        return
-    end
-    CMD.send_by_fd(source, c.fd, msg)
+  local c = gplayer.connection
+  if c == gplayer then
+    return
+  end
+  CMD.send_by_fd(source, c.fd, msg)
 end
 
 --[[
@@ -71,131 +77,125 @@ return:
     2.创建角色
 --]]
 CMD.sure_agent = function(source, fd, player_id, agent)
-    local conn = conns[fd]
-    if conn == nil then
-        local reason = "未完成登录即下线"
-        skynet.call("agentmgr", "lua", "repick", player_id, reason)
-        return false
-    end
+  local connection = connections[fd]
+  if connection == nil then
+    local reason = "未完成登录即下线"
+    skynet.call("agentmgr", "lua", "reqkick", player_id, reason)
+    return false
+  end
 
-    conn.player_id = player_id
+  connection.player_id = player_id
 
-    local gplayer = gateplayer()
-    gplayer.player_id = player_id
-    gplayer.agent = agent
-    gplayer.conn = conn
-    players[player_id] = gplayer
+  local gplayer = create_gateway_player()
+  gplayer.player_id = player_id
+  gplayer.agent = agent
+  gplayer.connection = connection
+  gateway_players[player_id] = gplayer
 
-    return true
+  return true
 end
 
 CMD.kick = function(source, player_id)
-    local gplayer = players[player_id]
-    if gplayer == nil then
-        return
-    end
+  local gateway_player = gateway_players[player_id]
+  if gateway_player == nil then
+    return
+  end
 
-    players[player_id] = nil
+  gateway_players[player_id] = nil
 
-    local c = gplayer.conn
-    if c == nil then
-        return
-    end
+  local connection = gateway_player.connection
+  if connection == nil then
+    return
+  end
 
-    conns[c.fd] = nil
-    -- 多余https://github.com/luopeiyu/million_game_server/issues/18
-    -- disconnect(c.fd)
-    socketdriver.close(c.fd)
+  connection[connection.fd] = nil
+  gateserver.closeclient(connection.fd)
 end
 
 local handler = {}
 
 function handler.command(cmd, source, ...)
-    skynet.error(cmd)
-	local f = assert(CMD[cmd])
-	return f(source, ...)
+  skynet.error(cmd)
+  local f = assert(CMD[cmd])
+  return f(source, ...)
 end
 
-function handler.open(source, conf)
-	return conf.address, conf.port
+function handler.open(source, config)
+	testService = skynet.newservice("test", "test", M.id)
+  return config.address, config.port
 end
 
 function handler.connect(fd, address)
-    print(string.format("connect from %s %d", address, fd))
-    local c = conn()
-    conns[fd] = c
-    c.fd = fd
-    c.address = address
-end
-
-local function json_unpack(buffer)
-    local len = string.len(buffer)
-    local namelen_format = string.format("> i2 c%d", len - 2)
-    local namelen, other = string.unpack(namelen_format, buffer)
-    local bodylen = len - 2 - namelen
-    local format = string.format("> c%d c%d", namelen, bodylen)
----@diagnostic disable-next-line: param-type-mismatch
-    local cmd, bodybuff = string.unpack(format, other)
-
-    local isok, msg = pcall(cjson.decode, bodybuff)
-    if not isok or cmd then
-        print("json_unpack error")
-        return
-    end
-
-    return cmd, msg
+  print(string.format("connect from %s %d", address, fd))
+  local connection = create_connection()
+  connection.fd = fd
+  connection.address = address
+  connections[fd] = connection
+  gateserver.openclient(fd)
 end
 
 function handler.message(fd, message_buffer, size)
-    local cmd, message_json = json_unpack(message_buffer);
-    skynet.error(string.format("recv %d [%s] {%s}", fd, cmd, message_json))
-    local isok, message = pcall(cjson.decode, message_json)
+  skynet.error("message:" .. size)
+  local message_string = netpack.tostring(message_buffer, size)
+  local s = message_string:sub(3)
+  skynet.error("[gateway] recv from fd:" .. fd .. " str:" .. s)
+  local isok, cmd, message = codec.json_unpack(message_string);
+  skynet.error("[gateway] cmd: " .. cmd)
 
-    if not isok then
-        return
-    end
+  if not isok then
+    skynet.error("[message] json_unpack fail")
+    return
+  end
 
-    local conn = conns[fd]
-    local player_id = conn.player_id
-    if not player_id then
-        local node = skynet.getenv("node")
-        local nodecfg = runconfig[node]
-        --todo:login节点负载均衡
-        local login_id = math.random(1, #nodecfg.login)
-        local login = "login" .. login_id
-        skynet.send(login, "lua", "client", fd, cmd, message)
-    else
-        local gplayer = players[player_id]
-        local agent = gplayer.agent
-        skynet.send(agent, "lua", "client", cmd, message)
+  local connection = connections[fd]
+  local player_id = connection.player_id
+
+  -- todo:多个if
+  if cmd == "EchoTest" then
+    if testService then
+      skynet.send(testService, "lua", "test", fd, cmd, message)
     end
+  elseif not player_id then
+    skynet.error("start login")
+    local node = skynet.getenv("node")
+    local nodecfg = runconfig[node]
+    --todo:login节点负载均衡
+    local login_id = math.random(1, #nodecfg.login)
+    local login = "login" .. login_id
+    skynet.send(login, "lua", "client", fd, cmd, message)
+  else
+    local gplayer = gateway_players[player_id]
+    local agent = gplayer.agent
+    skynet.send(agent, "lua", "client", cmd, message)
+  end
 end
 
 local function close_fd(fd)
-    local c = conns[fd]
-    if c == nil then
-        return
-    end
+  local c = connections[fd]
+  if c == nil then
+    return
+  end
 
-    local player_id = c.player_id
-    if player_id == nil then
-        return
-    else
-        players[player_id] = nil
-        local reason = "断线"
-        skynet.call("agentmgr", "lua", "repick", player_id, reason)
-    end
+  local player_id = c.player_id
+  if player_id == nil then
+    return
+  else
+    gateway_players[player_id] = nil
+    local reason = "断线"
+    skynet.call("agentmgr", "lua", "repick", player_id, reason)
+  end
+  gateserver.closeclient(fd)
 end
 
 function handler.disconnect(fd)
-    local c = conns[fd]
-    skynet.error("close " .. c.address .." fd:" .. fd)
-    close_fd(fd)
+  local c = connections[fd]
+  skynet.error("close " .. c.address .. " fd:" .. fd)
+  close_fd(fd)
 end
 
 function handler.error(fd, error)
-    skynet.error("[gateway] error " .. error)
-    close_fd(fd)
+  skynet.error("[gateway] error " .. error)
+  close_fd(fd)
 end
 
 gateserver.start(handler)

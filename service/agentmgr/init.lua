@@ -12,7 +12,7 @@ STATUS = {
 local players = {}
 
 --玩家类
-function mgrplayer()
+local function mgrplayer()
     local m = {
         playerid = nil,
         node = nil,
@@ -53,7 +53,7 @@ s.resp.reqlogin = function(source, playerid, node, gate)
     player.agent = nil
     player.status = STATUS.LOGIN
     players[playerid] = player
-    local agent = s.call(node, "nodemgr", "newservice", "agent", "agent", playerid)
+    local agent = s.call(node, "nodemgr", "newservice", "agent", "agent", playerid, gate)
     player.agent = agent
     player.status = STATUS.GAME
     return true, agent
@@ -80,6 +80,39 @@ s.resp.reqkick = function(source, playerid, reason)
     players[playerid] = nil
 
     return true
+end
+
+--获取在线人数
+local function get_online_count()
+	local count = 0
+	for playerid, player in pairs(players) do
+		count = count+1
+	end
+	return count
+end
+
+--将num数量的玩家踢下线
+s.resp.shutdown = function(source, num)
+	--当前玩家数
+	local count = get_online_count()
+	--踢下线
+	local n = 0
+	for playerid, player in pairs(players) do
+		skynet.fork(s.resp.reqkick, nil, playerid, "close server")
+		n = n + 1	--计数，总共发num条下线消息
+		if n >= num then
+			break
+		end
+	end
+	--等待玩家数下降
+	while true do
+		skynet.sleep(200)
+		local new_count = get_online_count()
+		skynet.error("shutdown online:"..new_count)
+		if new_count <= 0 or new_count <= count-num then
+			return new_count
+		end
+	end
 end
 
 --情况 永不下线

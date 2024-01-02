@@ -6,6 +6,7 @@ local M = {
     id   = 0,
     exit = nil,
     init = nil,
+    OnStart = nil,
     resp = {},
 }
 
@@ -42,6 +43,9 @@ end
 function M.start(name, id, ...)
     M.name = name
     M.id = tonumber(id)
+    if M.init then
+        M.OnStart(...)
+    end
     skynet.start(init)
 end
 

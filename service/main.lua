@@ -1,10 +1,8 @@
 local skynet = require "skynet"
+local netpack = require "skynet.netpack"
 local skynet_manager = require "skynet.manager"
 local runconfig = require "runconfig"
 local cluster = require "skynet.cluster"
-local cjson = require "cjson"
-
-local max_client = 64
 
 skynet.start(function()
     --初始化
@@ -22,7 +20,7 @@ skynet.start(function()
         skynet.name("gateway" .. i, srv)
         local address,port = skynet.call(srv, "lua", "open", {
             port = v.port,
-            maxclient = max_client,
+            maxclient = 64,
             nodelay = true,
         })
         skynet.error("gateway listen on " .. tostring(address).. ":" .. tostring(port))
@@ -41,11 +39,11 @@ skynet.start(function()
         local proxy = cluster.proxy(anode, "agentmgr")
         skynet.name("agentmgr", proxy)
     end
-    --scene (sid->sceneid)
-    -- for _, sid in pairs(runconfig.scene[mynode] or {}) do
-    --     local srv = skynet.newservice("scene", "scene", sid)
-    --     skynet.name("scene" .. sid, srv)
-    -- end
+    -- scene (sid->sceneid)
+    for _, sid in pairs(runconfig.scene[mynode] or {}) do
+        local srv = skynet.newservice("scene", "scene", sid)
+        skynet.name("scene" .. sid, srv)
+    end
     --退出自身
 
 
